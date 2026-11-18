@@ -1,0 +1,16 @@
+{
+  "name": "example-node-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Deliberately vulnerable example for ChainGuard. Never deploy.",
+  "main": "index.js",
+  "dependencies": {
+    "axios": "0.21.1",
+    "express": "4.17.1",
+    "jsonwebtoken": "8.5.1",
+    "lodash": "4.17.15",
+    "minimist": "1.2.5",
+    "moment": "2.29.1",
+    "node-fetch": "2.6.0"
+  }
+}

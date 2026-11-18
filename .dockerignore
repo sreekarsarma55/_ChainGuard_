@@ -1,0 +1,9 @@
+# Allow-list: the image needs only the package and the tool installer.
+*
+!pyproject.toml
+!README.md
+!LICENSE
+!src/
+!scripts/
+**/__pycache__
+**/*.egg-info

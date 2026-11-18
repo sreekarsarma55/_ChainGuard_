@@ -1,0 +1,22 @@
+# ChainGuard run results
+chainguard-out/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Dependencies and build output created inside the examples when the generators run
+node_modules/
+target/
+
+# OS and editor
+.DS_Store
+Thumbs.db
+*.swp
