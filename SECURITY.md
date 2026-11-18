@@ -4,7 +4,9 @@
 
 Please **do not open a public issue** for a security problem in ChainGuard itself.
 
-Use GitHub's private reporting: open the **Security** tab of this repository, choose **Report a vulnerability**, and describe the problem, how to reproduce it, and what you think the impact is. We will acknowledge the report, work on a fix, and credit you in the release notes unless you prefer not to be named.
+Use GitHub's private reporting: open the **Security** tab of this repository, choose **Report a vulnerability**, and describe the problem, how to reproduce it, and what you think the impact is.
+
+If the **Report a vulnerability** button is not there, open a public issue titled "Security contact request" with **no details** of the problem, and a maintainer will arrange a private channel. We will acknowledge the report, work on a fix, and credit you in the release notes unless you prefer not to be named.
 
 ## What is in scope
 
