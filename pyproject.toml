@@ -31,7 +31,7 @@ Homepage = "https://github.com/sreekarsarma55/_ChainGuard_"
 Issues = "https://github.com/sreekarsarma55/_ChainGuard_/issues"
 
 [project.optional-dependencies]
-dev = ["ruff==0.17.0", "pytest>=8"]
+dev = ["ruff==0.17.5", "pytest>=8"]
 
 [project.scripts]
 chainguard = "chainguard.cli:main"
