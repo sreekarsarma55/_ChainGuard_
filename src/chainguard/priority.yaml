@@ -1,0 +1,47 @@
+# ChainGuard priority score: the weights and the bands. chainguard.priority reads this file.
+#
+# A finding's score is 100 x (sum of weight x value) / (sum of weights), over the factors with a weight above 0.
+# Each value lies in [0, 1]:
+#   epss       the EPSS percentile (or the score, with use: score), from the dated snapshot
+#   kev        1 if the CISA KEV catalog lists it, 0 if not
+#   cvss       the highest CVSS v3 base score / 10; without one, the highest scanner severity (severity_values)
+#   fix        1 if a scanner names a fixed version, 0 if the scanners say there is none
+#   depth      1 / the component's distance from the target: 1 for a direct dependency, 0.5 at depth 2, ...
+#   consensus  generators x scanners reporting it, over the most the run allows (design rule D10)
+# A value that is not known takes `unknown`, and the explanation says so.
+#
+# These weights are a starting point chosen by judgement, not fitted to data. Known exploitation (KEV) is the
+# strongest signal, so keep it; check any change against your own review of the findings.
+version: 1
+factors:
+  epss:
+    weight: 0.30
+    use: percentile
+    unknown: 0.5
+  kev:
+    weight: 0.25
+    unknown: 0.0
+  cvss:
+    weight: 0.20
+    unknown: 0.5
+  fix:
+    weight: 0.10
+    unknown: 0.5
+  depth:
+    weight: 0.10
+    unknown: 0.5
+  consensus:
+    weight: 0.05
+    unknown: 0.5
+severity_values:
+  CRITICAL: 0.95
+  HIGH: 0.8
+  MEDIUM: 0.55
+  LOW: 0.25
+  NEGLIGIBLE: 0.05
+# A finding is in the first band whose minimum score it reaches.
+bands:
+  critical: 80
+  high: 60
+  medium: 40
+  low: 0

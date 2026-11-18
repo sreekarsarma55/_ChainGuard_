@@ -1,0 +1,13 @@
+# Deliberately vulnerable pins for ChainGuard's examples. NEVER deploy.
+# Only top-level packages are pinned; transitive dependencies are left to the
+# resolver so that "declared" and "resolved" inventories can differ.
+Django==3.2.0
+requests==2.25.0
+urllib3==1.26.4
+Flask==1.1.2
+Werkzeug==1.0.1
+Jinja2==2.11.2
+MarkupSafe==2.0.1
+itsdangerous==1.1.0
+PyJWT==1.7.1
+sqlparse==0.4.1

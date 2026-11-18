@@ -1,0 +1,142 @@
+# ChainGuard as a GitHub Action.
+#
+# Builds the fixed environment (the repository's Dockerfile: pinned tools, Python, Node, JDK, Maven), downloads the
+# vulnerability databases and the EPSS and KEV snapshots, scans the target with every generator and scanner, and
+# lets the gate decide. The job fails when the gate does (exit 1), and also when the policy or the run cannot be
+# read (exit 2); it passes on PASS and WARN. The reports are written whatever the decision: report.md goes to the
+# job summary, and report.sarif to GitHub code scanning (public repositories, or Advanced Security).
+#
+#   - uses: actions/checkout@<sha>
+#   - uses: sreekarsarma55/_ChainGuard_@<ref>     # or ./path/to/a/checkout of this repository
+#     with:
+#       path: app
+#
+# The workflow needs `permissions: security-events: write` for the SARIF upload.
+name: ChainGuard
+description: Fuse SBOM generators and vulnerability scanners, prioritise the findings, and gate the build
+author: ChainGuard contributors
+branding:
+  icon: shield
+  color: green
+inputs:
+  path:
+    description: The project directory or image archive (.tar from docker save) to scan, relative to the workspace
+    required: true
+  policy:
+    description: The policy YAML, relative to the workspace (default the packaged policy.yaml)
+    required: false
+    default: ""
+  priority-config:
+    description: Weights and bands of the priority score, relative to the workspace (default the packaged priority.yaml)
+    required: false
+    default: ""
+  upload-sarif:
+    description: Upload report.sarif to GitHub code scanning ("true" or "false")
+    required: false
+    default: "true"
+  sarif-all:
+    description: Put every finding in the SARIF log, not only those the policy acts on ("true" or "false")
+    required: false
+    default: "false"
+  category:
+    description: The code-scanning category, when one repository scans several targets (default chainguard/<path>)
+    required: false
+    default: ""
+  location:
+    description: The repository file that results point at when the target has no manifest, e.g. an image's Dockerfile
+    required: false
+    default: ""
+  out:
+    description: Where the run directories go, relative to the workspace
+    required: false
+    default: chainguard-out
+outputs:
+  decision:
+    description: PASS, WARN or FAIL; ERROR if the gate could not judge the run
+    value: ${{ steps.gate.outputs.decision }}
+  exit-code:
+    description: The gate's exit code (0 PASS or WARN, 1 FAIL, 2 the policy or the run could not be read)
+    value: ${{ steps.gate.outputs.exit-code }}
+  run-dir:
+    description: The run directory, relative to the workspace
+    value: ${{ steps.gate.outputs.run-dir }}
+  sarif:
+    description: The SARIF log, relative to the workspace
+    value: ${{ steps.gate.outputs.sarif }}
+runs:
+  using: composite
+  steps:
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+    - name: Build the fixed environment
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      with:
+        context: ${{ github.action_path }}
+        load: true
+        tags: chainguard:action
+        provenance: false
+        sbom: false
+        cache-from: type=gha,scope=chainguard-action
+        cache-to: type=gha,mode=max,scope=chainguard-action
+    # The same --user for every command, so the cache and the workspace stay writable.
+    - name: Download the vulnerability databases and the EPSS and KEV snapshots
+      shell: bash
+      run: |
+        mkdir -p "$RUNNER_TEMP/chainguard-cache"
+        # A failed download does not stop the job here: the gate fails closed on what is missing, and says why.
+        docker run --rm --user "$(id -u):$(id -g)" -v "$RUNNER_TEMP/chainguard-cache:/cache" chainguard:action db update \
+          || echo "::warning title=ChainGuard::a database or snapshot download failed; the gate will judge what is missing"
+    - name: Scan and gate
+      id: gate
+      shell: bash
+      env:
+        TARGET: ${{ inputs.path }}
+        POLICY: ${{ inputs.policy }}
+        PRIORITY: ${{ inputs.priority-config }}
+        SARIF_ALL: ${{ inputs.sarif-all }}
+        LOCATION: ${{ inputs.location }}
+        OUT: ${{ inputs.out }}
+      run: |
+        args=(scan "$TARGET" --out "$OUT" --gate)
+        if [ -n "$POLICY" ]; then args+=(--policy "$POLICY"); fi
+        if [ -n "$PRIORITY" ]; then args+=(--priority-config "$PRIORITY"); fi
+        if [ "$SARIF_ALL" = "true" ]; then args+=(--sarif-all); fi
+        if [ -n "$LOCATION" ]; then args+=(--location "$LOCATION"); fi
+        mkdir -p "$OUT"
+        before=$(ls -1 "$OUT")
+        code=0
+        docker run --rm --user "$(id -u):$(id -g)" \
+          -v "$GITHUB_WORKSPACE:/work" -v "$RUNNER_TEMP/chainguard-cache:/cache" \
+          chainguard:action "${args[@]}" || code=$?
+        run=$(comm -13 <(echo "$before") <(ls -1 "$OUT") | tail -n 1)
+        decision=ERROR
+        if [ -n "$run" ] && [ -f "$OUT/$run/verdict.json" ]; then
+          decision=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["decision"])' "$OUT/$run/verdict.json")
+        fi
+        {
+          echo "decision=$decision"
+          echo "exit-code=$code"
+          echo "run-dir=${run:+$OUT/$run}"
+          if [ -n "$run" ] && [ -f "$OUT/$run/report.sarif" ]; then echo "sarif=$OUT/$run/report.sarif"; else echo "sarif="; fi
+        } >> "$GITHUB_OUTPUT"
+        if [ -n "$run" ] && [ -f "$OUT/$run/report.md" ]; then
+          cat "$OUT/$run/report.md" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "## ChainGuard: the gate could not judge the run (exit $code); see the step log" >> "$GITHUB_STEP_SUMMARY"
+        fi
+        echo "ChainGuard: $decision (exit $code)"
+    - name: Upload the SARIF log to code scanning
+      if: inputs.upload-sarif == 'true' && steps.gate.outputs.sarif != ''
+      uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+      with:
+        sarif_file: ${{ steps.gate.outputs.sarif }}
+        category: ${{ inputs.category || format('chainguard/{0}', inputs.path) }}
+    - name: Fail the job if the gate fails
+      shell: bash
+      env:
+        CODE: ${{ steps.gate.outputs.exit-code }}
+        DECISION: ${{ steps.gate.outputs.decision }}
+      run: |
+        if [ "$CODE" != "0" ]; then
+          echo "::error title=ChainGuard::the gate decided $DECISION (exit $CODE); report.md is in the job summary"
+          exit "$CODE"
+        fi

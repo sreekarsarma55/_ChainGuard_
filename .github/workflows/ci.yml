@@ -1,0 +1,157 @@
+name: CI
+
+# Lint, test, then build the container and run a smoke scan of the examples in it, and test the GitHub Action.
+# Third-party actions are pinned by commit.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install the package with dev tools
+        run: pip install -e ".[dev]"
+      - name: Ruff
+        run: |
+          ruff check src tests
+          ruff format --check src tests
+      - name: ShellCheck
+        run: |
+          command -v shellcheck || sudo apt-get install -y shellcheck
+          shellcheck -x scripts/install-tools.sh scripts/run-checks.sh
+      - name: Entry point
+        run: chainguard --version
+
+  tests:
+    name: Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install the package with dev tools
+        run: pip install -e ".[dev]"
+      - name: Tests (one per script in tests/checks; check_aliases asks OSV.dev, so it needs the network)
+        run: python3 -m pytest -q
+
+  smoke-scan:
+    name: Smoke scan in the container
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: chainguard:ci
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # The same --user for every command, so the cache and the workspace stay writable.
+      - name: Download vulnerability databases and the EPSS and KEV snapshots
+        run: |
+          mkdir -p "$RUNNER_TEMP/cache"
+          docker run --rm --user "$(id -u):$(id -g)" -v "$RUNNER_TEMP/cache:/cache" chainguard:ci db update
+          docker run --rm --user "$(id -u):$(id -g)" -v "$RUNNER_TEMP/cache:/cache" chainguard:ci tools
+      - name: Scan the Python, Java and Node examples
+        run: |
+          for fixture in python-app java-app node-app; do
+            docker run --rm --user "$(id -u):$(id -g)" \
+              -v "$GITHUB_WORKSPACE:/work" -v "$RUNNER_TEMP/cache:/cache" \
+              chainguard:ci scan "examples/$fixture" --out chainguard-out
+          done
+      - name: Gate the examples (java-app must FAIL on its KEV findings; the others must not)
+        run: |
+          status=0
+          for run in chainguard-out/*/; do
+            code=0
+            docker run --rm --user "$(id -u):$(id -g)" \
+              -v "$GITHUB_WORKSPACE:/work" -v "$RUNNER_TEMP/cache:/cache" \
+              chainguard:ci gate "$run" || code=$?
+            case "$run" in
+              *java-app/) want=1 ;;
+              *) want=0 ;;
+            esac
+            if [ "$code" != "$want" ]; then
+              echo "::error::$run: the gate exited $code, expected $want"
+              status=1
+            fi
+          done
+          exit "$status"
+      - name: Add each example's report to the job summary
+        if: always()
+        run: |
+          shopt -s nullglob
+          for run in chainguard-out/*/; do
+            # the gate's report.md (step 3.4); summary.md if the gate did not get that far
+            if [ -f "$run/report.md" ]; then cat "$run/report.md"; else cat "$run/summary.md"; fi >> "$GITHUB_STEP_SUMMARY"
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: smoke-scan
+          path: chainguard-out/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  action:
+    name: The GitHub Action, on two examples
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: node-app, where the gate warns
+        id: node
+        uses: ./
+        with:
+          path: examples/node-app
+          upload-sarif: "false"  # code scanning needs Advanced Security on a private repository
+      - name: java-app, where the gate fails on its KEV findings
+        id: java
+        continue-on-error: true
+        uses: ./
+        with:
+          path: examples/java-app
+          upload-sarif: "false"
+      - name: The action decided as the gate does, and left its reports
+        env:
+          NODE: ${{ steps.node.outputs.decision }}/${{ steps.node.outputs.exit-code }}
+          JAVA: ${{ steps.java.outputs.decision }}/${{ steps.java.outputs.exit-code }}/${{ steps.java.outcome }}
+          SARIF: ${{ steps.java.outputs.sarif }}
+        run: |
+          echo "node-app: $NODE · java-app: $JAVA · $SARIF"
+          test "$NODE" = "WARN/0" || { echo "::error::node-app: expected WARN/0, got $NODE"; exit 1; }
+          test "$JAVA" = "FAIL/1/failure" || { echo "::error::java-app: expected FAIL/1/failure, got $JAVA"; exit 1; }
+          test -s "$SARIF" || { echo "::error::java-app: no SARIF log at '$SARIF'"; exit 1; }
+
