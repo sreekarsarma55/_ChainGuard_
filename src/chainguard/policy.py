@@ -117,9 +117,10 @@ def _check_condition(key: str, value: Any, where: str) -> None:
         bad = [s for s in _list(value) if s.upper() not in SEVERITY_ORDER]
         if bad:
             raise PolicyError(f"{where}.severity: unknown {', '.join(bad)}; choose from {', '.join(SEVERITY_ORDER)}")
-    elif key in ("band", "vulnerability", "component", "type"):
-        if not _list(value) or any(not v for v in _list(value)):
-            raise PolicyError(f"{where}.{key}: expected a name or a list of names")
+    elif key in ("band", "vulnerability", "component", "type") and (
+        not _list(value) or any(not v for v in _list(value))
+    ):
+        raise PolicyError(f"{where}.{key}: expected a name or a list of names")
 
 
 def parse(data: Any, *, source: str = "<policy>", sha256: str = "", today: date | None = None) -> Policy:
